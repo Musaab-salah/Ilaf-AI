@@ -41,6 +41,28 @@ async function chat(payload, onChunk) {
   throw new Error('ضع GEMINI_API_KEY في ملف .env أو شغّل Ollama محلياً.')
 }
 
+const CODING_MODEL = 'qwen2.5-coder:1.5b'
+const GENERAL_MODEL = 'qwen2.5:1.5b'
+
+async function listOllamaModels(url = 'http://127.0.0.1:11434') {
+  try {
+    const res = await fetch(`${url.replace(/\/$/, '')}/api/tags`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return (data.models || []).map((m) => m.name)
+  } catch {
+    return []
+  }
+}
+
+async function pickOllamaModel(payload) {
+  const requested = payload.ollamaModel || CODING_MODEL
+  if (payload.intent === 'coding') return requested
+  const models = await listOllamaModels(payload.ollamaUrl)
+  const general = models.find((name) => name === GENERAL_MODEL || (name.startsWith('qwen2.5:') && !name.includes('coder')))
+  return general || requested
+}
+
 async function chatOllama(payload, onChunk) {
   const base = (payload.ollamaUrl || 'http://127.0.0.1:11434').replace(/\/$/, '')
   const messages = [
@@ -48,11 +70,11 @@ async function chatOllama(payload, onChunk) {
     { role: 'user', content: payload.userMessage || payload.prompt || '' }
   ]
   const body = {
-    model: payload.ollamaModel || 'qwen2.5-coder:1.5b',
+    model: await pickOllamaModel(payload),
     messages,
     stream: true,
     keep_alive: '60m',
-    options: { temperature: 0.2, num_ctx: 1024, num_predict: 180 }
+    options: { temperature: 0.2, num_ctx: 2048, num_predict: 400 }
   }
   const res = await ollamaHttpPost(base, '/api/chat', body)
   if (res.statusCode < 200 || res.statusCode >= 300) {

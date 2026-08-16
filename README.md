@@ -16,7 +16,12 @@ GEMINI_API_KEY=your_key
 GEMINI_MODEL=gemini-2.5-flash-lite
 ```
 
-Put this in `.env` (never commit it). Without a key, Ilaf AI uses local Ollama when available.
+Put this in `.env` (never commit it). Without a key, Ilaf AI uses local Ollama when available:
+
+```bash
+ollama pull qwen2.5-coder:1.5b   # coding questions
+ollama pull qwen2.5:1.5b         # general questions
+```
 
 ## Build Windows app
 
