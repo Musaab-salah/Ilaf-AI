@@ -16,7 +16,16 @@ GEMINI_API_KEY=your_key
 GEMINI_MODEL=gemini-2.5-flash-lite
 ```
 
-Put this in `.env` (never commit it). Without a key, Ilaf AI uses local Ollama when available.
+Put this in `.env` (never commit it). Without a key, Ilaf AI uses local Ollama when available:
+
+```bash
+ollama pull qwen2.5-coder:1.5b   # coding questions
+ollama pull qwen2.5:7b           # general questions (most accurate, needs ~8GB RAM)
+ollama pull qwen2.5:3b           # general questions (good balance)
+ollama pull qwen2.5:1.5b         # lighter fallback for general questions
+```
+
+General questions are grounded with a live Wikipedia (or DuckDuckGo) excerpt when one is found, to reduce hallucinations. If no general model is installed, the app downloads `qwen2.5:1.5b` automatically on the first general question, and falls back to answering directly from the source excerpt when the model is unavailable or refuses.
 
 ## Build Windows app
 

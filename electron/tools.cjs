@@ -102,7 +102,12 @@ function systemPromptFor(intent) {
   if (intent === 'coding') {
     return 'أنت ILAF AI. إن طلب المستخدم كوداً فأعطه الكود داخل صندوق لغته المناسبة. اشرح باختصار بالعربية. لا تختلق بيانات حيّة مثل أسعار العملات.'
   }
-  return 'أنت ILAF AI، مساعد عام. أجب بنص عربي واضح ومباشر. لا تكتب كود JavaScript ولا أي كود إلا إذا طلب المستخدم البرمجة صراحة. لا تختلق أرقاماً أو أسعار صرف.'
+  return [
+    'أنت ILAF AI، مساعد عام. أجب بنص عربي واضح ومباشر.',
+    'الدقة أولاً: لا تختلق معلومات أو أرقاماً أو تواريخ. إن لم تكن متأكداً من معلومة فقل ذلك صراحة.',
+    'إذا زُوّدت بمقتطف من مصدر موثوق فاعتمد عليه أولاً في إجابتك واذكر المصدر.',
+    'لا تكتب أي كود إلا إذا طلب المستخدم البرمجة صراحة.'
+  ].join(' ')
 }
 
 function buildUserMessage(intent, prompt, editorCode) {
@@ -112,4 +117,111 @@ function buildUserMessage(intent, prompt, editorCode) {
   return prompt
 }
 
-module.exports = { detectIntent, answerCurrency, systemPromptFor, buildUserMessage }
+function cleanQuery(prompt) {
+  const query = String(prompt || '')
+    .replace(/اعطني|أعطني|معلومات عن|ما هي|ما هو|من هو|من هي|تحدث عن|اشرح لي|عرفني ب|tell me about|information about|who is|what is/gi, ' ')
+    .replace(/[؟?]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return query.length >= 2 ? query : ''
+}
+
+async function fetchWikiContext(prompt) {
+  const query = cleanQuery(prompt)
+  if (!query) return null
+  for (const lang of ['ar', 'en']) {
+    try {
+      const search = await fetchJson(
+        `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=1&format=json&origin=*`,
+        6000
+      )
+      const title = search?.query?.search?.[0]?.title
+      if (!title) continue
+      const page = await fetchJson(
+        `https://${lang}.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&titles=${encodeURIComponent(title)}&format=json&origin=*`,
+        6000
+      )
+      const pages = page?.query?.pages || {}
+      const first = Object.values(pages)[0]
+      const extract = (first?.extract || '').trim()
+      if (extract) {
+        return {
+          title,
+          extract: extract.slice(0, 2500),
+          lang,
+          url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`
+        }
+      }
+    } catch {
+      // try next language
+    }
+  }
+  return null
+}
+
+function buildGroundedMessage(prompt, source) {
+  return [
+    `مقتطف من ${source.sourceName || 'ويكيبيديا'} عن «${source.title}»:`,
+    source.extract,
+    '',
+    'سؤال المستخدم:',
+    prompt,
+    '',
+    'أجب بالعربية معتمداً على المقتطف أعلاه أولاً، ولا تضف معلومات غير متأكد منها.'
+  ].join('\n')
+}
+
+async function fetchSearchContext(prompt) {
+  const query = cleanQuery(prompt)
+  if (!query) return null
+  try {
+    const data = await fetchJson(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
+      6000
+    )
+    const extract = (data?.AbstractText || '').trim()
+    if (extract) {
+      return {
+        title: data.Heading || query,
+        extract: extract.slice(0, 2500),
+        url: data.AbstractURL || '',
+        sourceName: data.AbstractSource || 'DuckDuckGo'
+      }
+    }
+  } catch {
+    // no search result
+  }
+  return null
+}
+
+async function fetchContext(prompt) {
+  const wiki = await fetchWikiContext(prompt)
+  if (wiki) return { ...wiki, sourceName: 'ويكيبيديا' }
+  return fetchSearchContext(prompt)
+}
+
+function looksLikeRefusal(text) {
+  const t = String(text || '').trim()
+  if (!t) return true
+  if (t.length > 400) return false
+  return /i'?m sorry|i can'?t assist|i cannot assist|i can'?t help|cannot help with that|لا أستطيع المساعدة|لا يمكنني المساعدة|عذراً،? لا أستطيع/i.test(t)
+}
+
+function formatSourceAnswer(source) {
+  const lines = [`«${source.title}» (المصدر: ${source.sourceName || 'ويكيبيديا'}):`, '', source.extract]
+  if (source.url) lines.push('', `المزيد: ${source.url}`)
+  return lines.join('\n')
+}
+
+module.exports = {
+  detectIntent,
+  answerCurrency,
+  systemPromptFor,
+  buildUserMessage,
+  fetchWikiContext,
+  fetchSearchContext,
+  fetchContext,
+  buildGroundedMessage,
+  looksLikeRefusal,
+  formatSourceAnswer
+}
