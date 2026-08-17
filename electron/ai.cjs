@@ -1,7 +1,7 @@
 const http = require('http')
 const { URL } = require('url')
 const { streamGemini, getGeminiKey, getGeminiModel } = require('./gemini-stream.cjs')
-const { detectIntent, answerCurrency, systemPromptFor, buildUserMessage, fetchWikiContext, buildGroundedMessage } = require('./tools.cjs')
+const { detectIntent, answerCurrency, systemPromptFor, buildUserMessage, fetchContext, buildGroundedMessage, looksLikeRefusal, formatSourceAnswer } = require('./tools.cjs')
 
 async function chat(payload, onChunk) {
   const prompt = (payload.prompt || '').trim()
@@ -18,8 +18,8 @@ async function chat(payload, onChunk) {
   payload.userMessage = buildUserMessage(intent, prompt, payload.editorCode)
 
   if (intent === 'general') {
-    const wiki = await fetchWikiContext(prompt)
-    if (wiki) payload.userMessage = buildGroundedMessage(prompt, wiki)
+    payload.context = await fetchContext(prompt)
+    if (payload.context) payload.userMessage = buildGroundedMessage(prompt, payload.context)
   }
 
   const provider = payload.provider === 'ollama' ? 'ollama' : 'gemini'
@@ -60,7 +60,7 @@ async function listOllamaModels(url = 'http://127.0.0.1:11434') {
   }
 }
 
-async function pickOllamaModel(payload) {
+async function pickOllamaModel(payload, onChunk) {
   const requested = payload.ollamaModel || CODING_MODEL
   if (payload.intent === 'coding') return requested
   const models = await listOllamaModels(payload.ollamaUrl)
@@ -68,7 +68,45 @@ async function pickOllamaModel(payload) {
     if (models.includes(preferred)) return preferred
   }
   const general = models.find((name) => name.startsWith('qwen2.5:') && !name.includes('coder'))
-  return general || requested
+  if (general) return general
+  const pulled = await pullOllamaModel(payload.ollamaUrl, GENERAL_MODELS[GENERAL_MODELS.length - 1], onChunk)
+  return pulled || requested
+}
+
+async function pullOllamaModel(url, model, onChunk) {
+  const base = (url || 'http://127.0.0.1:11434').replace(/\/$/, '')
+  try {
+    onChunk?.(`جارٍ تحميل النموذج العام ${model} لأول مرة (مرة واحدة فقط)...`)
+    const res = await ollamaHttpPost(base, '/api/pull', { name: model, stream: true }, 30 * 60 * 1000)
+    if (res.statusCode < 200 || res.statusCode >= 300) return null
+    await new Promise((resolve, reject) => {
+      let buffer = ''
+      res.setEncoding('utf8')
+      res.on('data', (chunk) => {
+        buffer += chunk
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const json = JSON.parse(line)
+            if (json.total && json.completed) {
+              const pct = Math.round((json.completed / json.total) * 100)
+              onChunk?.(`جارٍ تحميل النموذج العام ${model}... ${pct}%`)
+            }
+          } catch {
+            // ignore
+          }
+        }
+      })
+      res.on('end', resolve)
+      res.on('error', reject)
+    })
+    const models = await listOllamaModels(base)
+    return models.includes(model) ? model : null
+  } catch {
+    return null
+  }
 }
 
 async function chatOllama(payload, onChunk) {
@@ -78,20 +116,36 @@ async function chatOllama(payload, onChunk) {
     { role: 'user', content: payload.userMessage || payload.prompt || '' }
   ]
   const body = {
-    model: await pickOllamaModel(payload),
+    model: await pickOllamaModel(payload, onChunk),
     messages,
     stream: true,
     keep_alive: '60m',
     options: { temperature: 0.2, num_ctx: 4096, num_predict: 512 }
   }
-  const res = await ollamaHttpPost(base, '/api/chat', body)
-  if (res.statusCode < 200 || res.statusCode >= 300) {
-    throw new Error(`Ollama ${res.statusCode}. تأكد أن ollama serve يعمل.`)
+  let full
+  try {
+    const res = await ollamaHttpPost(base, '/api/chat', body)
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw new Error(`Ollama ${res.statusCode}. تأكد أن ollama serve يعمل.`)
+    }
+    full = await readNodeOllamaStream(res, onChunk)
+  } catch (error) {
+    if (payload.context) {
+      const text = formatSourceAnswer(payload.context)
+      onChunk?.(text)
+      return text
+    }
+    throw error
   }
-  return readNodeOllamaStream(res, onChunk)
+  if (payload.intent === 'general' && payload.context && looksLikeRefusal(full)) {
+    const text = formatSourceAnswer(payload.context)
+    onChunk?.(text)
+    return text
+  }
+  return full
 }
 
-function ollamaHttpPost(base, pathname, body) {
+function ollamaHttpPost(base, pathname, body, timeoutMs = 25000) {
   const u = new URL(pathname, `${base}/`)
   const payload = JSON.stringify(body)
   return new Promise((resolve, reject) => {
@@ -108,7 +162,7 @@ function ollamaHttpPost(base, pathname, body) {
       },
       (res) => resolve(res)
     )
-    req.setTimeout(25000, () => {
+    req.setTimeout(timeoutMs, () => {
       req.destroy()
       reject(new Error('انتهت مهلة Ollama.'))
     })

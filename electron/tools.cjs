@@ -117,12 +117,18 @@ function buildUserMessage(intent, prompt, editorCode) {
   return prompt
 }
 
-async function fetchWikiContext(prompt) {
+function cleanQuery(prompt) {
   const query = String(prompt || '')
     .replace(/اعطني|أعطني|معلومات عن|ما هي|ما هو|من هو|من هي|تحدث عن|اشرح لي|عرفني ب|tell me about|information about|who is|what is/gi, ' ')
     .replace(/[؟?]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
-  if (!query || query.length < 2) return null
+  return query.length >= 2 ? query : ''
+}
+
+async function fetchWikiContext(prompt) {
+  const query = cleanQuery(prompt)
+  if (!query) return null
   for (const lang of ['ar', 'en']) {
     try {
       const search = await fetchJson(
@@ -146,10 +152,10 @@ async function fetchWikiContext(prompt) {
   return null
 }
 
-function buildGroundedMessage(prompt, wiki) {
+function buildGroundedMessage(prompt, source) {
   return [
-    `مقتطف من ويكيبيديا عن «${wiki.title}»:`,
-    wiki.extract,
+    `مقتطف من ${source.sourceName || 'ويكيبيديا'} عن «${source.title}»:`,
+    source.extract,
     '',
     'سؤال المستخدم:',
     prompt,
@@ -158,4 +164,57 @@ function buildGroundedMessage(prompt, wiki) {
   ].join('\n')
 }
 
-module.exports = { detectIntent, answerCurrency, systemPromptFor, buildUserMessage, fetchWikiContext, buildGroundedMessage }
+async function fetchSearchContext(prompt) {
+  const query = cleanQuery(prompt)
+  if (!query) return null
+  try {
+    const data = await fetchJson(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
+      6000
+    )
+    const extract = (data?.AbstractText || '').trim()
+    if (extract) {
+      return {
+        title: data.Heading || query,
+        extract: extract.slice(0, 1200),
+        url: data.AbstractURL || '',
+        sourceName: data.AbstractSource || 'DuckDuckGo'
+      }
+    }
+  } catch {
+    // no search result
+  }
+  return null
+}
+
+async function fetchContext(prompt) {
+  const wiki = await fetchWikiContext(prompt)
+  if (wiki) return { ...wiki, sourceName: 'ويكيبيديا' }
+  return fetchSearchContext(prompt)
+}
+
+function looksLikeRefusal(text) {
+  const t = String(text || '').trim()
+  if (!t) return true
+  if (t.length > 400) return false
+  return /i'?m sorry|i can'?t assist|i cannot assist|i can'?t help|cannot help with that|لا أستطيع المساعدة|لا يمكنني المساعدة|عذراً،? لا أستطيع/i.test(t)
+}
+
+function formatSourceAnswer(source) {
+  const lines = [`«${source.title}» (المصدر: ${source.sourceName || 'ويكيبيديا'}):`, '', source.extract]
+  if (source.url) lines.push('', `المزيد: ${source.url}`)
+  return lines.join('\n')
+}
+
+module.exports = {
+  detectIntent,
+  answerCurrency,
+  systemPromptFor,
+  buildUserMessage,
+  fetchWikiContext,
+  fetchSearchContext,
+  fetchContext,
+  buildGroundedMessage,
+  looksLikeRefusal,
+  formatSourceAnswer
+}

@@ -24,7 +24,7 @@ ollama pull qwen2.5:3b           # general questions (recommended, more accurate
 ollama pull qwen2.5:1.5b         # lighter fallback for general questions
 ```
 
-General questions are also grounded with a live Wikipedia excerpt when one is found, to reduce hallucinations.
+General questions are grounded with a live Wikipedia (or DuckDuckGo) excerpt when one is found, to reduce hallucinations. If no general model is installed, the app downloads `qwen2.5:1.5b` automatically on the first general question, and falls back to answering directly from the source excerpt when the model is unavailable or refuses.
 
 ## Build Windows app
 
