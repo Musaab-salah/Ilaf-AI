@@ -1,7 +1,7 @@
 const http = require('http')
 const { URL } = require('url')
 const { streamGemini, getGeminiKey, getGeminiModel } = require('./gemini-stream.cjs')
-const { detectIntent, answerCurrency, systemPromptFor, buildUserMessage } = require('./tools.cjs')
+const { detectIntent, answerCurrency, systemPromptFor, buildUserMessage, fetchWikiContext, buildGroundedMessage } = require('./tools.cjs')
 
 async function chat(payload, onChunk) {
   const prompt = (payload.prompt || '').trim()
@@ -16,6 +16,11 @@ async function chat(payload, onChunk) {
   payload.intent = intent
   payload.systemPrompt = systemPromptFor(intent)
   payload.userMessage = buildUserMessage(intent, prompt, payload.editorCode)
+
+  if (intent === 'general') {
+    const wiki = await fetchWikiContext(prompt)
+    if (wiki) payload.userMessage = buildGroundedMessage(prompt, wiki)
+  }
 
   const provider = payload.provider === 'ollama' ? 'ollama' : 'gemini'
   if (provider === 'ollama') return chatOllama(payload, onChunk)
@@ -42,7 +47,7 @@ async function chat(payload, onChunk) {
 }
 
 const CODING_MODEL = 'qwen2.5-coder:1.5b'
-const GENERAL_MODEL = 'qwen2.5:1.5b'
+const GENERAL_MODELS = ['qwen2.5:3b', 'qwen2.5:1.5b']
 
 async function listOllamaModels(url = 'http://127.0.0.1:11434') {
   try {
@@ -59,7 +64,10 @@ async function pickOllamaModel(payload) {
   const requested = payload.ollamaModel || CODING_MODEL
   if (payload.intent === 'coding') return requested
   const models = await listOllamaModels(payload.ollamaUrl)
-  const general = models.find((name) => name === GENERAL_MODEL || (name.startsWith('qwen2.5:') && !name.includes('coder')))
+  for (const preferred of GENERAL_MODELS) {
+    if (models.includes(preferred)) return preferred
+  }
+  const general = models.find((name) => name.startsWith('qwen2.5:') && !name.includes('coder'))
   return general || requested
 }
 
@@ -74,7 +82,7 @@ async function chatOllama(payload, onChunk) {
     messages,
     stream: true,
     keep_alive: '60m',
-    options: { temperature: 0.2, num_ctx: 2048, num_predict: 400 }
+    options: { temperature: 0.2, num_ctx: 4096, num_predict: 512 }
   }
   const res = await ollamaHttpPost(base, '/api/chat', body)
   if (res.statusCode < 200 || res.statusCode >= 300) {

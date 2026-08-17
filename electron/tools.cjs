@@ -102,7 +102,12 @@ function systemPromptFor(intent) {
   if (intent === 'coding') {
     return 'أنت ILAF AI. إن طلب المستخدم كوداً فأعطه الكود داخل صندوق لغته المناسبة. اشرح باختصار بالعربية. لا تختلق بيانات حيّة مثل أسعار العملات.'
   }
-  return 'أنت ILAF AI، مساعد عام. أجب بنص عربي واضح ومباشر. لا تكتب كود JavaScript ولا أي كود إلا إذا طلب المستخدم البرمجة صراحة. لا تختلق أرقاماً أو أسعار صرف.'
+  return [
+    'أنت ILAF AI، مساعد عام. أجب بنص عربي واضح ومباشر.',
+    'الدقة أولاً: لا تختلق معلومات أو أرقاماً أو تواريخ. إن لم تكن متأكداً من معلومة فقل ذلك صراحة.',
+    'إذا زُوّدت بمقتطف من مصدر موثوق فاعتمد عليه أولاً في إجابتك واذكر المصدر.',
+    'لا تكتب أي كود إلا إذا طلب المستخدم البرمجة صراحة.'
+  ].join(' ')
 }
 
 function buildUserMessage(intent, prompt, editorCode) {
@@ -112,4 +117,45 @@ function buildUserMessage(intent, prompt, editorCode) {
   return prompt
 }
 
-module.exports = { detectIntent, answerCurrency, systemPromptFor, buildUserMessage }
+async function fetchWikiContext(prompt) {
+  const query = String(prompt || '')
+    .replace(/اعطني|أعطني|معلومات عن|ما هي|ما هو|من هو|من هي|تحدث عن|اشرح لي|عرفني ب|tell me about|information about|who is|what is/gi, ' ')
+    .replace(/[؟?]/g, ' ')
+    .trim()
+  if (!query || query.length < 2) return null
+  for (const lang of ['ar', 'en']) {
+    try {
+      const search = await fetchJson(
+        `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=1&format=json&origin=*`,
+        6000
+      )
+      const title = search?.query?.search?.[0]?.title
+      if (!title) continue
+      const summary = await fetchJson(
+        `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`,
+        6000
+      )
+      const extract = (summary?.extract || '').trim()
+      if (extract) {
+        return { title, extract: extract.slice(0, 1200), lang, url: summary?.content_urls?.desktop?.page || '' }
+      }
+    } catch {
+      // try next language
+    }
+  }
+  return null
+}
+
+function buildGroundedMessage(prompt, wiki) {
+  return [
+    `مقتطف من ويكيبيديا عن «${wiki.title}»:`,
+    wiki.extract,
+    '',
+    'سؤال المستخدم:',
+    prompt,
+    '',
+    'أجب بالعربية معتمداً على المقتطف أعلاه أولاً، ولا تضف معلومات غير متأكد منها.'
+  ].join('\n')
+}
+
+module.exports = { detectIntent, answerCurrency, systemPromptFor, buildUserMessage, fetchWikiContext, buildGroundedMessage }

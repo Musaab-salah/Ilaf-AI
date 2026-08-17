@@ -20,8 +20,11 @@ Put this in `.env` (never commit it). Without a key, Ilaf AI uses local Ollama w
 
 ```bash
 ollama pull qwen2.5-coder:1.5b   # coding questions
-ollama pull qwen2.5:1.5b         # general questions
+ollama pull qwen2.5:3b           # general questions (recommended, more accurate)
+ollama pull qwen2.5:1.5b         # lighter fallback for general questions
 ```
+
+General questions are also grounded with a live Wikipedia excerpt when one is found, to reduce hallucinations.
 
 ## Build Windows app
 
