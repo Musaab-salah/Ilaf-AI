@@ -47,7 +47,7 @@ async function chat(payload, onChunk) {
 }
 
 const CODING_MODEL = 'qwen2.5-coder:1.5b'
-const GENERAL_MODELS = ['qwen2.5:3b', 'qwen2.5:1.5b']
+const GENERAL_MODELS = ['qwen2.5:7b', 'llama3.1:8b', 'qwen2.5:3b', 'qwen2.5:1.5b']
 
 async function listOllamaModels(url = 'http://127.0.0.1:11434') {
   try {
@@ -69,6 +69,8 @@ async function pickOllamaModel(payload, onChunk) {
   }
   const general = models.find((name) => name.startsWith('qwen2.5:') && !name.includes('coder'))
   if (general) return general
+  const fallback = models.find((name) => !name.includes('coder') && !name.includes('embed'))
+  if (fallback) return fallback
   const pulled = await pullOllamaModel(payload.ollamaUrl, GENERAL_MODELS[GENERAL_MODELS.length - 1], onChunk)
   return pulled || requested
 }
@@ -120,11 +122,11 @@ async function chatOllama(payload, onChunk) {
     messages,
     stream: true,
     keep_alive: '60m',
-    options: { temperature: 0.2, num_ctx: 4096, num_predict: 512 }
+    options: { temperature: 0.2, num_ctx: 8192, num_predict: 768 }
   }
   let full
   try {
-    const res = await ollamaHttpPost(base, '/api/chat', body)
+    const res = await ollamaHttpPost(base, '/api/chat', body, 120000)
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw new Error(`Ollama ${res.statusCode}. تأكد أن ollama serve يعمل.`)
     }

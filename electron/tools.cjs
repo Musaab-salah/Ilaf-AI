@@ -137,13 +137,20 @@ async function fetchWikiContext(prompt) {
       )
       const title = search?.query?.search?.[0]?.title
       if (!title) continue
-      const summary = await fetchJson(
-        `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`,
+      const page = await fetchJson(
+        `https://${lang}.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&titles=${encodeURIComponent(title)}&format=json&origin=*`,
         6000
       )
-      const extract = (summary?.extract || '').trim()
+      const pages = page?.query?.pages || {}
+      const first = Object.values(pages)[0]
+      const extract = (first?.extract || '').trim()
       if (extract) {
-        return { title, extract: extract.slice(0, 1200), lang, url: summary?.content_urls?.desktop?.page || '' }
+        return {
+          title,
+          extract: extract.slice(0, 2500),
+          lang,
+          url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`
+        }
       }
     } catch {
       // try next language
@@ -176,7 +183,7 @@ async function fetchSearchContext(prompt) {
     if (extract) {
       return {
         title: data.Heading || query,
-        extract: extract.slice(0, 1200),
+        extract: extract.slice(0, 2500),
         url: data.AbstractURL || '',
         sourceName: data.AbstractSource || 'DuckDuckGo'
       }
